@@ -1,0 +1,44 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.mahao.remotecontrol'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.mahao.remotecontrol'
+        minSdk 26
+        targetSdk 35
+        versionCode 7
+        versionName '1.6'
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false
+            // 沿用 debug 签名，保证 release 能覆盖安装到已装 debug 包的设备上
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    lint {
+        abortOnError false
+    }
+}
+
+dependencies {
+    // 13.1.x 把 Shizuku.newProcess 改成了 private，这里固定在仍公开该 API 的 13.0.0
+    implementation 'dev.rikka.shizuku:api:13.0.0'
+    implementation 'dev.rikka.shizuku:provider:13.0.0'
+    implementation 'com.squareup.okhttp3:okhttp:3.14.9'
+    implementation 'com.google.code.gson:gson:2.11.0'
+}

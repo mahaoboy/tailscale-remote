@@ -59,6 +59,36 @@
         android:layout_marginBottom="8dp" />
 
     <TextView
+        android:id="@+id/txtShizukuHint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Shizuku 未运行"
+        android:textSize="12sp"
+        android:textColor="#CC0000" />
+
+    <Button
+        android:id="@+id/btnShizuku"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="如何启用 Shizuku"
+        android:layout_marginBottom="8dp" />
+
+    <CheckBox
+        android:id="@+id/chkDanger"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="允许危险命令（shell / 授权限 / 改系统设置）"
+        android:textSize="12sp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="默认关闭。开启后远程可执行任意 shell；卸载其他应用、重启关机、删除文件、清应用数据永远被拦截。"
+        android:textSize="10sp"
+        android:textColor="#999999"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
         android:id="@+id/txtLog"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

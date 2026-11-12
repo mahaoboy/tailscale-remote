@@ -1,8 +1,14 @@
 # Build artifacts
 build/
+app/build/
+.gradle/
+local.properties
 *.apk
 *.idsig
 *.keystore
+
+# 内置的 Shizuku 安装包随仓库分发（构建产物和证书仍然忽略）
+!app/src/main/assets/shizuku-manager.apk
 
 # Sensitive files (private keys, certificates, signing keys)
 certs/
@@ -11,12 +17,10 @@ keystore.jks
 # Logs
 *.log
 
-# Gradle
-gradle/
-gradle.properties
-settings.gradle
-build.gradle
-app/build.gradle
+# Python / macOS
+__pycache__/
+*.pyc
+.DS_Store
 
 # IDE
 .idea/

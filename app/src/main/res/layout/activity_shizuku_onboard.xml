@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="启用 Shizuku"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:layout_marginBottom="14dp"
+            android:text="Shizuku 以 shell 身份执行命令，让本应用可以使用 pm、input、dumpsys、安装应用等能力。安装包已内置，无需去应用商店下载；启动服务需要你手动确认一次。"
+            android:textSize="12sp"
+            android:textColor="#666666" />
+
+        <!-- 步骤 1 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#F5F5F5"
+            android:padding="12dp"
+            android:layout_marginBottom="10dp">
+
+            <TextView
+                android:id="@+id/txtStep1Title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="1. 安装 Shizuku"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#222222" />
+
+            <TextView
+                android:id="@+id/txtStep1Desc"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:layout_marginBottom="8dp"
+                android:textSize="12sp"
+                android:textColor="#666666" />
+
+            <Button
+                android:id="@+id/btnInstall"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="安装内置 Shizuku" />
+        </LinearLayout>
+
+        <!-- 步骤 2 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#F5F5F5"
+            android:padding="12dp"
+            android:layout_marginBottom="10dp">
+
+            <TextView
+                android:id="@+id/txtStep2Title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="2. 启动 Shizuku 服务"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#222222" />
+
+            <TextView
+                android:id="@+id/txtStep2Desc"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:layout_marginBottom="8dp"
+                android:textSize="12sp"
+                android:textColor="#666666" />
+
+            <Button
+                android:id="@+id/btnOpen"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="打开 Shizuku" />
+
+            <Button
+                android:id="@+id/btnDebug"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="无线调试设置"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- 步骤 3 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#F5F5F5"
+            android:padding="12dp"
+            android:layout_marginBottom="10dp">
+
+            <TextView
+                android:id="@+id/txtStep3Title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="3. 授权本应用"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#222222" />
+
+            <TextView
+                android:id="@+id/txtStep3Desc"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:layout_marginBottom="8dp"
+                android:textSize="12sp"
+                android:textColor="#666666" />
+
+            <Button
+                android:id="@+id/btnGrant"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="授权本应用" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/txtOnboardStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="10dp"
+            android:textSize="13sp"
+            android:textColor="#333333" />
+
+        <Button
+            android:id="@+id/btnDone"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="完成" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="内置 Shizuku 13.6.0（moe.shizuku.privileged.api），由 RikkaW 开发，Apache-2.0 许可，原样分发未做修改。"
+            android:textSize="10sp"
+            android:textColor="#999999" />
+
+    </LinearLayout>
+</ScrollView>

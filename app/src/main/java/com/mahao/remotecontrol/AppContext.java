@@ -11,6 +11,7 @@ public class AppContext extends Application {
         super.onCreate();
         instance = this;
         Thread.setDefaultUncaughtExceptionHandler(new CrashHandler());
+        ShizukuHelper.init();
     }
 
     public static Context getAppContext() {
