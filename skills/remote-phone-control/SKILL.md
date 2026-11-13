@@ -30,7 +30,7 @@ description: 通过 tailscale-remote 远程操作一台真实 Android 手机（�
 
 ## 开始前：确认通道
 
-所有命令在仓库根目录执行（`server.py` / `remotectl.py` 所在目录）。若 `python3` 缺 `websockets`，用项目虚拟环境的解释器（例如 `/tmp/tr-venv/bin/python3`）。
+所有命令在仓库根目录执行（`server.py` / `remotectl.py` 所在目录）。若 `python3` 缺 `websockets`，用仓库内的 `.venv/bin/python3`（`python3 -m venv .venv && .venv/bin/pip install websockets` 装一次即可）。`/tmp` 下的临时 venv 重启会消失，只适合当次调试。
 
 ```bash
 python3 remotectl.py check
@@ -62,6 +62,80 @@ ws:on a11y:on shizuku:on backend:shizuku ver:1.7 safety:safe boot:73 up:13m auto
 4. 中继重启过仍不通：再跑一次 `ping`；还不行就说明手机侧 APP 被杀或 Tailscale 断开，如实告知用户，不要连续重试刷屏
 
 不要为了"修好"去改手机系统设置或授权。
+
+### 中继没起时（连不上 wss://127.0.0.1:8765）
+
+CLI 会直接给出判断依据，不再抛 traceback（退出码 2）：
+
+```
+连不上中继 wss://127.0.0.1:8765/client：ConnectionRefusedError: [Errno 61] Connect call failed ('127.0.0.1', 8765)
+  起中继：cd <仓库> && .venv/bin/python -u server.py
+  配了 launchd 常驻可拉起：launchctl kickstart -k gui/$(id -u)/com.mahao.tailscale-remote
+  看日志：tail -20 /tmp/tailscale-remote-server.log
+```
+
+看到这段就是中继进程不在，不是手机的问题。先分清「没起」和「起了但手机没连」：
+
+```bash
+lsof -nP -iTCP:8765 -sTCP:LISTEN   # 有输出=在监听
+pgrep -fl 'server.py'
+tail -20 /tmp/tailscale-remote-server.log
+```
+
+**方式 A：launchd 常驻（登录自启 + 异常退出拉起）**
+
+解释器必须能 import websockets，且不能放在 `/tmp`（重启会清空）：
+
+```bash
+cd <仓库>
+python3 -m venv .venv && .venv/bin/pip install websockets
+```
+
+写 `~/Library/LaunchAgents/com.mahao.tailscale-remote.plist`（`<仓库>` 换成绝对路径）：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.mahao.tailscale-remote</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string><仓库>/.venv/bin/python</string>
+        <string>-u</string>
+        <string>server.py</string>
+    </array>
+    <key>WorkingDirectory</key><string><仓库></string>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+    <key>ThrottleInterval</key><integer>10</integer>
+    <key>StandardOutPath</key><string>/tmp/tailscale-remote-server.log</string>
+    <key>StandardErrorPath</key><string>/tmp/tailscale-remote-server.log</string>
+</dict>
+</plist>
+```
+
+载入与日常操作：
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mahao.tailscale-remote.plist  # 装载
+launchctl print gui/$(id -u)/com.mahao.tailscale-remote | grep -E 'state|pid'             # 看状态
+launchctl kickstart -k gui/$(id -u)/com.mahao.tailscale-remote                            # 重启
+launchctl bootout gui/$(id -u)/com.mahao.tailscale-remote                                 # 停用
+```
+
+改过 plist 必须 `bootout` 后再 `bootstrap`，否则改动不生效。开机/登录后若 `check` 连不上，先 `launchctl print` 看 state 是不是 `running`。
+
+**方式 B：临时起一次**
+
+```bash
+cd <仓库>
+nohup .venv/bin/python -u server.py > /tmp/tailscale-remote-server.log 2>&1 &
+```
+
+`-u` 不能省：输出重定向到文件时 Python 会缓冲，看不到 `[+] Phone connected` 这类实时日志，下次出事就没线索。这种方式在 Mac 重启或终端会话结束后不会自动恢复。
+
+无论哪种方式，起好后等 5–10 秒（手机每 5s 重连一次），`ping` 回 `pong` 且日志出现 `[+] Phone connected from 100.x.x.x` 才算通道恢复；只看到 `[!] Waiting for phone...` 说明手机侧还没连上。
 
 ## 标准操作流程：看 → 动 → 复核
 

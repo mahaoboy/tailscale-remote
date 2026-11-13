@@ -30,6 +30,7 @@ Usage:
 """
 import asyncio, base64, json, os, shlex, ssl, sys, time
 import websockets
+from websockets.exceptions import WebSocketException
 
 SERVER = "wss://127.0.0.1:8765/client"
 
@@ -344,3 +345,12 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+    except (OSError, WebSocketException) as e:
+        # 最常见的是中继没起（ConnectionRefused），别把 traceback 甩给用户
+        print(f"  连不上中继 {SERVER}：{type(e).__name__}: {e}", file=sys.stderr)
+        print(f"  起中继：cd {os.path.dirname(os.path.abspath(__file__))}"
+              f" && .venv/bin/python -u server.py", file=sys.stderr)
+        print("  配了 launchd 常驻可拉起：launchctl kickstart -k gui/$(id -u)/com.mahao.tailscale-remote",
+              file=sys.stderr)
+        print("  看日志：tail -20 /tmp/tailscale-remote-server.log", file=sys.stderr)
+        sys.exit(2)
