@@ -129,18 +129,24 @@ python3 remotectl.py check
 | 目的 | 命令 |
 |------|------|
 | 连接与能力检查 | `ping` / `check` |
+| 列出可点元素 | `uis`（全部）/ `uis "确认"`（过滤） |
+| 按序号点击 | `uitap 3`（与上一条 `uis` 用同一个 filter） |
 | 看屏幕文字 | `gettext` |
-| 按文字点击 | `taptext "确定"` |
+| 按文字点击 | `taptext "确定"`（多个同名元素时加序号：`taptext "确定" 1`） |
 | 查文字坐标 | `findtext "设置"` |
+| 等界面加载 | `waittext "首页" 15` |
 | 按坐标点击 | `tap 540 1188` |
 | 滑动 / 长按 | `swipe 500 1800 500 600 300` / `longtap 540 1188` |
-| 输入文字 | `type "hello"` |
+| 输入文字 | `type "hello"` / `type "你好"` |
 | 返回 / 主页 | `back` / `home` |
 | 启动应用 | `open com.android.settings` |
+| 传文件到手机 | `put ./app-debug.apk`（默认 `/data/local/tmp/`） |
 | 截图 | `screenshot`（无障碍）或 `screencap`（shell），保存到 `/tmp/screenshot.png` |
 | 屏幕分辨率 | `screensize` |
 | Shizuku 自愈 | `recover` |
 | 完整命令表 | 见 [README](../README.md#功能) |
+
+处理界面密集的 App 时，推荐顺序是 `uis` → `uitap <序号>`：比 `dump` + 自己算坐标稳定，也避免 `taptext` 命中错误的那一个（列表里常有多个同名元素）。
 
 返回统一是 JSON：
 
@@ -149,7 +155,9 @@ python3 remotectl.py check
 {"id":"1735400000001","ok":false,"extra":"a11y service not connected"}
 ```
 
-`output` 是结果，`extra` 是失败原因或附加信息。单条命令超时按类型区分（普通 20s，`shell/am/dumpsys` 40s，`screencap/screenshot` 60s，`install/update/recover` 200s）。
+`output` 是结果，`extra` 是失败原因或附加信息。失败时 CLI 会在 stderr 追加一行 `hint:`（例如无障碍未开、Shizuku 未运行、文字不存在该先 `gettext`）。长任务（`update/put/install`）会先输出 `.. 进度` 再给最终结果。
+
+超时按命令类型区分（普通 20s，`shell` 70s，`screencap/screenshot` 60s，`install` 220s，`update` 420s，`put` 600s），单次可用 `--timeout <秒>` 覆盖。注意 `--timeout` 是 CLI 的全局参数，不要和 `am ... -t <mime>` 里的 `-t` 混用。
 
 如果中继不在本机，改 `remotectl.py` 顶部的 `SERVER` 常量（默认 `wss://127.0.0.1:8765/client`）。
 
@@ -206,6 +214,9 @@ python3 remotectl.py check
 | `recover` 失败：`Wi-Fi 未连接` | 先让手机连上可用 Wi-Fi；无线调试依赖 Wi-Fi |
 | `recover` 失败：`设备处于锁屏状态` | 解锁后重试；远程无法解锁 |
 | `screenshot` 超时/失败 | Android 11+ 无障碍截图在某些界面不可用，改用 `screencap`（需要 Shizuku） |
+| `install`/`update` 报 `System server has no access to read file context ... fuse` | 系统安装器读不到 `/sdcard`（FUSE）。新版会自动先复制到 `/data/local/tmp` 再装；旧版请先 `put` 到 `/data/local/tmp` 再装 |
+| `am` 报 `Unknown command: start ...` | 整条命令被当成一个参数了。CLI 已自动拆分；直连协议时确保 `args` 是数组（`["start","-n","pkg/.Act"]`） |
+| `type` 中文失败 | 确认无障碍已开启（`ping` 显示 `a11y:on`）；`input text 中文` 也会自动改走无障碍写入 |
 | 指令偶尔没回包 | 中继已做旧连接替换与 ping 保活；仍有异常时重启 `server.py`，再 `ping` 复验 |
 
 ## 9. 卸载

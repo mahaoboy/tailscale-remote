@@ -39,14 +39,16 @@ python3 remotectl.py check
 期望：
 
 ```
-ws:on a11y:on shizuku:on backend:shizuku ver:1.6 safety:safe boot:73 up:13m autorecover:done recstep:-
+ws:on a11y:on shizuku:on backend:shizuku ver:1.7 safety:safe boot:73 up:13m autorecover:done recstep:- fg:com.android.launcher built:11-13 19:22
 ```
 
 需要的最低能力：
 
-- `a11y:on` —— 没有它，点击/滑动/读屏/截图全部不可用
+- `a11y:on` —— 没有它，点击/滑动/读屏/截图/中文输入全部不可用
 - `shizuku:on backend:shizuku` —— 只有 shell 类命令需要；纯 UI 操作可以没有
 - `safety:safe` —— 安全模式，符合默认预期
+- `fg:` 当前前台包名 —— 动手机前先看它，确认没被用户切走；`built:` 是当前安装包的构建时间，排查"改了没生效"时用它
+- `extra` 里出现 `a11y off` / `shizuku off` 就是对应能力缺失的提示
 
 `ping` 返回 `pong a11y:on shell:shizuku`（简版）。
 
@@ -63,46 +65,59 @@ ws:on a11y:on shizuku:on backend:shizuku ver:1.6 safety:safe boot:73 up:13m auto
 
 ## 标准操作流程：看 → 动 → 复核
 
-1. **看**：`gettext`（所有可见文字）或 `dump`（节点树）或 `screencap`（截图）
-2. **动**：优先按文字操作 --- `taptext "确认"`；需要精确位置时先 `findtext "确认"` 拿坐标再 `tap x y`
-3. **复核**：再 `gettext` 或截图确认界面确实变了；不要仅凭"命令返回 ok"就当操作成功
+1. **看**：`uis`（可点节点清单，带序号和坐标）优先；要看全部文字用 `gettext`；需要节点树细节再 `dump`；复杂界面用 `screencap`
+2. **动**：优先 `uitap <序号>`（与上一条 `uis` 用同一 filter）；其次 `taptext "确认"`；元素重名时用 `taptext "确认" 1` 指定第几个；只有都不可用时才 `tap x y`
+3. **复核**：再 `uis` / `gettext` 或截图确认界面确实变了；不要仅凭"命令返回 ok"就当操作成功
 4. **收尾**：完成用户要求后，`back` / `home` 回到桌面，别把手机留在半开的设置页
 
 截图会保存到 `/tmp/screenshot.png`，用 Read 工具查看该文件。
+
+**用户中途接管手机**：每次准备点击前先 `check` 看 `fg:`，或先截图确认。若前台已经变成用户在用的 App（聊天、支付、输入法打开着），立即停止所有输入并如实告知，不要抢界面。
+
+**等待界面加载**：用 `waittext "加载完成" 15`，不要用固定 sleep 硬猜。
 
 ## 常用命令
 
 | 命令 | 说明 |
 |------|------|
-| `check` | 完整状态：ws / a11y / shizuku / backend / 版本 / 安全模式 / 开机与自愈状态 |
+| `check` | 完整状态：ws / a11y / shizuku / backend / 版本 / 安全模式 / 开机与自愈 / 前台应用 / 构建时间 |
 | `screensize` | 返回 `宽x高`，用于判断坐标范围 |
+| `uis [filter]` | 列出可操作节点：`#序号 类名 "文字" [l,t,r,b] click/edit/checked/scroll` |
+| `uitap <序号> [filter]` | 按 `uis` 的序号点击（自动找可点击父节点） |
 | `gettext` | 当前窗口全部可见文字 |
 | `dump` | 完整 UI 节点树（含 class / text / bounds） |
-| `findtext "文字"` | 返回 `cx,cy [left,top,right,bottom]` |
-| `taptext "文字"` | 点击包含该文字的元素，优先用它 |
+| `findtext "文字" [序号]` | 返回 `cx,cy [left,top,right,bottom]`，`--exact` 精确匹配 |
+| `taptext "文字" [序号]` | 点击包含该文字的元素，优先用它 |
+| `waittext "文字" [秒]` | 轮询直到文字出现 |
 | `tap x y` / `longtap x y` | 坐标点击 / 长按 |
-| `swipe x1 y1 x2 y2 [毫秒]` | 滑动，默认 300ms |
-| `type "文字"` | 写入当前焦点输入框（先 `tap` 输入框再输入） |
+| `swipe x1 y1 x2 y2 [毫秒]` | 滑动，默认 300ms，可到 3000ms（精细拖动别再用 `input swipe`） |
+| `type "文字"` | 写入当前焦点输入框（先 `tap` 输入框再输入）；支持中文 |
 | `back` / `home` | 返回 / 回桌面 |
 | `open <包名>` | 启动应用，如 `open com.android.mms` |
 | `screenshot` | 无障碍截图（Android 11+），保存 `/tmp/screenshot.png` |
 | `screencap` | shell 截图，需要 Shizuku |
-| `input ...` / `keyevent <code>` | 仅 Shizuku：`input swipe 1 2 3 4 300`、`keyevent 3`(HOME)、`26`(电源) |
+| `input ...` / `keyevent <code>` | 仅 Shizuku：`input swipe 1 2 3 4 300`、`keyevent 3`(HOME)、`26`(电源)；`input text 中文` 会自动改走无障碍 |
 | `dumpsys battery` / `props ro.product.model` | 仅 Shizuku：查电量、机型 |
+| `put <本地文件> [目标路径]` | 把电脑上的文件推到手机，默认 `/data/local/tmp/<文件名>`，只允许 tmp/sdcard |
+| `install <路径>` | `pm install -r`；`/sdcard` 路径自动复制到 `/data/local/tmp` 再装 |
 | `recover` | Shizuku 自愈，最多等 150s |
 | `shizuku [status\|request]` | 查看/申请 Shizuku 授权 |
 
-结果格式：`{"id":"...","ok":true,"output":"..."}` 或 `{"ok":false,"extra":"原因"}`。`extra` 是失败原因。
+结果格式：`{"id":"...","ok":true,"output":"..."}` 或 `{"ok":false,"extra":"原因"}`。`extra` 是失败原因。长任务会先打印 `.. 进度` 再给最终结果；失败时 CLI 在 stderr 给出 `hint:`。单次可用 `--timeout <秒>` 覆盖等待时间。
 
 ## 排障对照
 
 | 返回/现象 | 处理 |
 |-----------|------|
-| `a11y service not connected` | 无障碍被系统关了。告知用户去 设置→无障碍 重新打开「远程控制」，不要自己改 |
+| `a11y service not connected` | 无障碍被系统关了。告知用户去 设置→无障碍 重新打开「远程控制」，不要自己改。此时仍可用 shell 的 `uiautomator dump /sdcard/ui.xml` + `input tap` 兜底 |
 | `no active window` | 屏幕关闭或无窗口。先 `keyevent 26`（需 Shizuku）或请用户亮屏解锁 |
-| `text not found: X` | 文字不在当前屏。先 `gettext` 看实际文案（可能是简写/英文/图标按钮） |
-| `no editable field focused` | 先点输入框，再 `type`；或改用 `input text`（Shizuku，仅 ASCII） |
+| `text not found: X` | 文字不在当前屏。先 `gettext` / `uis` 看实际文案（可能是简写/英文/图标按钮） |
+| `index out of range: i (matches=N)` | 同名元素数量变了，重跑 `uis` / `findtext` 取最新序号 |
+| `no editable field focused` | 先点输入框，再 `type`；或改用 `input text`（中文会自动走无障碍） |
 | `performAction returned false` | 控件不支持直接操作，改用坐标 `tap` |
+| `System server has no access to read file context` | 安装包在 `/sdcard` 上系统 installer 读不到：用 `put` 推到 `/data/local/tmp`，或让新版 `install`/`update` 自动中转 |
+| `Unknown command: start ...` | 整条 `am` 命令被当成一个参数了；CLI 已自动拆分，直连协议时 `args` 必须是数组 |
+| `install`/`update` 报 `timeout` | 装的是本应用自身时，系统替换进程会断开连接，超时属正常。等几秒再 `check`，看 `ver:` 和 `built:` 是否已更新 |
 | shell 命令失败 / `shell:app` | Shizuku 未运行。跑 `recover`；仍失败就说明需要用户解锁并连 Wi-Fi 后在手机上启动 Shizuku |
 | `recover` 返回 `Wi-Fi 未连接` / `锁屏` | 如实转告用户，等条件满足后重试 |
 | 截图超时 | 当前界面禁止截图，换 `gettext`，或改用 `screencap`（需 Shizuku） |
@@ -111,8 +126,9 @@ ws:on a11y:on shizuku:on backend:shizuku ver:1.6 safety:safe boot:73 up:13m auto
 
 - 只能操作当前前台界面；无法在后台点按其他 App
 - 锁屏无法解锁；无法读密码框内容
-- 中文输入依赖 `ACTION_SET_TEXT`（`type`），`input text` 只支持 ASCII
+- 中文输入依赖无障碍 `ACTION_SET_TEXT`（`type` 或 `input text 中文` 自动回退）；无障碍关闭时中文无法直接输入
 - 手势类操作（`tap`/`swipe`）返回 ok 只代表手势已派发，界面是否变化要复核
+- `uis` 的序号只在同一界面状态下有效；点击后要重新取
 - 中继无客户端认证，只应在 Tailscale 内网使用
 - 一个中继同时只保留一个手机连接和一个客户端连接，新连接会替换旧连接
 

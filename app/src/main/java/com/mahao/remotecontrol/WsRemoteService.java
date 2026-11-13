@@ -42,6 +42,7 @@ public class WsRemoteService extends Service {
     private static volatile boolean reconnectScheduled = false;
     private static volatile String serverUrl;
     private OkHttpClient client;
+    private OkHttpClient downClient;
     private PowerManager.WakeLock wakeLock;
     private static android.os.Handler mainHandler;
     private static android.widget.TextView txtLog;
@@ -133,6 +134,15 @@ public class WsRemoteService extends Service {
         sendRaw(gson.toJson(r));
     }
 
+    /** 长任务的中间进度：同一 id 的多条消息，CLI 只把最后一条当作结果。 */
+    public static void sendProgress(String id, String msg) {
+        if (id == null || id.isEmpty()) return;
+        JsonObject r = new JsonObject();
+        r.addProperty("id", id);
+        r.addProperty("progress", msg == null ? "" : msg);
+        sendRaw(gson.toJson(r));
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -152,6 +162,14 @@ public class WsRemoteService extends Service {
 
             client = new OkHttpClient.Builder()
                 .pingInterval(60, TimeUnit.SECONDS)
+                .sslSocketFactory(sslFactory, (javax.net.ssl.X509TrustManager) trustAll[0])
+                .hostnameVerifier((hostname, session) -> true)
+                .build();
+            // 下载链路单独一套超时：默认 10s 读超时会让大 APK 直接 "update failed: timeout"
+            downClient = new OkHttpClient.Builder()
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.MINUTES)
+                .writeTimeout(60, TimeUnit.SECONDS)
                 .sslSocketFactory(sslFactory, (javax.net.ssl.X509TrustManager) trustAll[0])
                 .hostnameVerifier((hostname, session) -> true)
                 .build();
@@ -460,8 +478,18 @@ public class WsRemoteService extends Service {
                             + " safety:" + (isDangerUnlocked(this) ? "unlocked" : "safe")
                             + " boot:" + bootCount + " up:" + uptimeMin + "m"
                             + " autorecover:" + autoState
-                            + " recstep:" + (ShizukuRecovery.isRunning() ? ShizukuRecovery.currentStep() : "-");
-                    sendResult(id, true, status, null);
+                            + " recstep:" + (ShizukuRecovery.isRunning() ? ShizukuRecovery.currentStep() : "-")
+                            + " fg:" + orDash(RemoteAccessibilityService.foregroundPackage())
+                            + " built:" + buildTime();
+                    StringBuilder hints = new StringBuilder();
+                    if (!RemoteAccessibilityService.isReady()) {
+                        hints.append("a11y off -> 点击/滑动/读屏/输入不可用，需在手机 设置-无障碍 启用「远程控制」");
+                    }
+                    if (!ShizukuHelper.isReady()) {
+                        if (hints.length() > 0) hints.append("; ");
+                        hints.append("shizuku off -> shell 能力受限，可试 recover");
+                    }
+                    sendResult(id, true, status, hints.length() == 0 ? null : hints.toString());
                     break;
                 }
                 case "screensize": {
@@ -509,12 +537,29 @@ public class WsRemoteService extends Service {
                     break;
                 case "findtext": {
                     String findText = obj.get("text").getAsString();
-                    RemoteAccessibilityService.findText(findText, id);
+                    RemoteAccessibilityService.findText(findText,
+                            bool(obj, "exact", false), intOf(obj, "index", 0), id);
                     break;
                 }
                 case "taptext": {
                     String tapText = obj.get("text").getAsString();
-                    RemoteAccessibilityService.tapText(tapText, id);
+                    RemoteAccessibilityService.tapText(tapText,
+                            bool(obj, "exact", false), intOf(obj, "index", 0), id);
+                    break;
+                }
+                case "uis": {
+                    String filter = obj.has("filter") ? obj.get("filter").getAsString() : "";
+                    RemoteAccessibilityService.listUi(filter, id);
+                    break;
+                }
+                case "uitap": {
+                    int uiIndex = intOf(obj, "index", -1);
+                    if (uiIndex < 0) {
+                        sendResult(id, false, null, "uitap: index required (先跑 uis)");
+                        break;
+                    }
+                    String uiFilter = obj.has("filter") ? obj.get("filter").getAsString() : "";
+                    RemoteAccessibilityService.tapUiIndex(uiIndex, uiFilter, id);
                     break;
                 }
                 case "gettext":
@@ -541,7 +586,7 @@ public class WsRemoteService extends Service {
                 }
                 case "shell": {
                     String command = obj.get("command").getAsString();
-                    runShell("shell", command, id, 30000);
+                    runShell("shell", command, id, timeoutOf(obj, 60000));
                     break;
                 }
                 case "shizuku": {
@@ -560,7 +605,17 @@ public class WsRemoteService extends Service {
                         sendResult(id, false, null, "input: args is empty");
                         break;
                     }
-                    runShell("input", "input " + Shell.quoteAll(args), id, 10000);
+                    // input text 走 InputShellCommand，中文会 NPE；有 a11y 时透明改走 ACTION_SET_TEXT
+                    if ("text".equals(args[0]) && args.length > 1 && !isAscii(joinTail(args, 1))) {
+                        if (RemoteAccessibilityService.isReady()) {
+                            RemoteAccessibilityService.typeText(joinTail(args, 1), id);
+                        } else {
+                            sendResult(id, false, null,
+                                    "input text: 中文需要无障碍开启，或改用 type 命令");
+                        }
+                        break;
+                    }
+                    runShell("input", "input " + Shell.quoteAll(args), id, timeoutOf(obj, 15000));
                     break;
                 }
                 case "keyevent": {
@@ -617,7 +672,28 @@ public class WsRemoteService extends Service {
                 }
                 case "install": {
                     String path = obj.get("path").getAsString();
-                    runShell("install", "pm install -r " + Shell.quote(path) + " 2>&1", id, 180000);
+                    String staged = stageForInstall(path);
+                    if (staged == null) {
+                        sendResult(id, false, path,
+                                "install: 复制到 /data/local/tmp 失败（系统 installer 读不到 /sdcard）");
+                        break;
+                    }
+                    if (!staged.equals(path)) {
+                        sendProgress(id, "已复制到 " + staged + "（系统 installer 读不到 /sdcard）");
+                    }
+                    runShell("install", "pm install -r " + Shell.quote(staged)
+                            + " 2>&1", id, timeoutOf(obj, 180000));
+                    break;
+                }
+                case "put":
+                case "push": {
+                    if (!obj.has("data") || obj.get("data").isJsonNull()) {
+                        sendResult(id, false, null, "push: data(base64) required");
+                        break;
+                    }
+                    String name = obj.has("name") ? obj.get("name").getAsString() : "upload.bin";
+                    String dest = obj.has("path") ? obj.get("path").getAsString() : "";
+                    pushFile(name, dest, obj.get("data").getAsString(), id);
                     break;
                 }
                 case "uninstall": {
@@ -731,73 +807,211 @@ public class WsRemoteService extends Service {
     private void executeUpdate(String apkUrl, String id) {
         new Thread(() -> {
             try {
-                // Download APK using OkHttp
                 showLog("update: downloading " + apkUrl);
-                okhttp3.Response resp = client.newCall(
+                sendProgress(id, "开始下载更新包");
+                okhttp3.Response resp = downClient.newCall(
                     new okhttp3.Request.Builder().url(apkUrl).build()
                 ).execute();
                 if (!resp.isSuccessful()) {
                     sendResult(id, false, null, "download failed: HTTP " + resp.code());
                     return;
                 }
-                java.io.InputStream is = resp.body().byteStream();
-
-                // Save to MediaStore Downloads (API 29+)
-                android.content.ContentResolver resolver = getContentResolver();
-                android.content.ContentValues values = new android.content.ContentValues();
-                values.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, "app-update.apk");
-                values.put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/vnd.android.package-archive");
-                values.put(android.provider.MediaStore.Downloads.RELATIVE_PATH,
-                    android.os.Environment.DIRECTORY_DOWNLOADS);
-                android.net.Uri uri = resolver.insert(
-                    android.provider.MediaStore.Downloads.getContentUri(
-                        android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY),
-                    values);
-                if (uri == null) {
-                    sendResult(id, false, null, "MediaStore insert failed");
+                long total = resp.body().contentLength();
+                Saved apk = saveToDownloads("app-update.apk", resp.body().byteStream());
+                resp.close();
+                if (apk == null) {
+                    sendResult(id, false, null, "save apk to Downloads failed");
                     return;
                 }
-                java.io.OutputStream os = resolver.openOutputStream(uri);
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = is.read(buf)) > 0) os.write(buf, 0, n);
-                os.close();
-                is.close();
-                showLog("update: APK saved, triggering install");
+                String saved = apk.path;
+                showLog("update: saved " + saved + " (" + total + " bytes)");
 
                 if (Shell.hasShell()) {
+                    sendProgress(id, "下载完成，准备安装（应用会短暂离线后自动恢复）");
+                    String staged = stageToTmp(saved, "/data/local/tmp/app-update.apk");
+                    if (staged == null) {
+                        sendResult(id, false, saved, "install: 复制到 /data/local/tmp 失败");
+                        return;
+                    }
                     Shell.Result r = Shell.exec(
-                        "pm install -r '/storage/emulated/0/Download/app-update.apk' 2>&1", 180000);
+                        "pm install -r " + Shell.quote(staged) + " 2>&1", 300000);
                     String out = r.stdout + (r.stderr.isEmpty() ? "" : "\n" + r.stderr);
                     showLog("update: pm install exit=" + r.exitCode);
-                    sendResult(id, r.ok(), out, "install via shizuku, exit=" + r.exitCode);
+                    sendResult(id, r.ok() || out.contains("Success"), out,
+                            "install via shizuku, exit=" + r.exitCode + ", apk=" + saved);
                     return;
                 }
 
-                // Check install permission
+                // 无 Shizuku：走系统安装器
                 android.content.pm.PackageManager pm = getPackageManager();
+                android.net.Uri apkUri = apk.uri;
                 if (pm.canRequestPackageInstalls()) {
-                    // Trigger install
                     android.content.Intent installIntent = new android.content.Intent(android.content.Intent.ACTION_VIEW);
-                    installIntent.setDataAndType(uri, "application/vnd.android.package-archive");
+                    installIntent.setDataAndType(apkUri, "application/vnd.android.package-archive");
                     installIntent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
                     installIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
                     startActivity(installIntent);
-                    sendResult(id, true, "install triggered", null);
+                    sendResult(id, true, "install triggered", "apk=" + saved);
                 } else {
-                    // Request permission
                     android.content.Intent settingsIntent = new android.content.Intent(
                         android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
                     settingsIntent.setData(android.net.Uri.parse("package:" + getPackageName()));
                     settingsIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
                     startActivity(settingsIntent);
-                    sendResult(id, false, null, "need to grant install permission in Settings");
+                    sendResult(id, false, null, "需要允许安装未知来源应用");
                 }
             } catch (Exception e) {
                 sendResult(id, false, null, "update failed: " + e.getMessage());
                 showLog("update failed: " + e.getMessage());
             }
         }).start();
+    }
+
+    private static final class Saved {
+        final String path;
+        final android.net.Uri uri;
+
+        Saved(String path, android.net.Uri uri) {
+            this.path = path;
+            this.uri = uri;
+        }
+    }
+
+    /** 写入系统下载目录（应用可写、shell 可读）；同名文件由系统加序号，不覆盖用户文件。 */
+    private Saved saveToDownloads(String name, java.io.InputStream is) throws Exception {
+        android.content.ContentResolver resolver = getContentResolver();
+        android.net.Uri collection = android.provider.MediaStore.Downloads.getContentUri(
+                android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY);
+        String rel = android.os.Environment.DIRECTORY_DOWNLOADS;
+        android.content.ContentValues values = new android.content.ContentValues();
+        values.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, name);
+        values.put(android.provider.MediaStore.Downloads.MIME_TYPE, mimeFor(name));
+        values.put(android.provider.MediaStore.Downloads.RELATIVE_PATH, rel);
+        android.net.Uri uri = resolver.insert(collection, values);
+        if (uri == null) return null;
+        String actual = name;
+        try (android.database.Cursor c = resolver.query(uri,
+                new String[]{android.provider.MediaStore.Downloads.DISPLAY_NAME}, null, null, null)) {
+            if (c != null && c.moveToFirst()) actual = c.getString(0);
+        }
+        try (java.io.OutputStream os = resolver.openOutputStream(uri)) {
+            if (os == null) return null;
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = is.read(buf)) > 0) os.write(buf, 0, n);
+        }
+        return new Saved("/storage/emulated/0/" + rel + "/" + actual, uri);
+    }
+
+    private static String mimeFor(String name) {
+        String n = name.toLowerCase(java.util.Locale.US);
+        if (n.endsWith(".apk")) return "application/vnd.android.package-archive";
+        if (n.endsWith(".png")) return "image/png";
+        if (n.endsWith(".jpg") || n.endsWith(".jpeg")) return "image/jpeg";
+        if (n.endsWith(".pdf")) return "application/pdf";
+        if (n.endsWith(".txt") || n.endsWith(".log")) return "text/plain";
+        return "application/octet-stream";
+    }
+
+    /** /sdcard 对系统 installer 不可读，先落到 shell 可读的 /data/local/tmp。 */
+    private static String stageForInstall(String path) {
+        if (!Shell.hasShell()) return path;
+        if (!(path.startsWith("/sdcard") || path.startsWith("/storage/"))) return path;
+        return stageToTmp(path, "/data/local/tmp/rc-install.apk");
+    }
+
+    private static String stageToTmp(String src, String dest) {
+        if (!Shell.hasShell()) return null;
+        Shell.Result r = Shell.exec("cp " + Shell.quote(src) + " " + Shell.quote(dest)
+                + " && chmod 644 " + Shell.quote(dest) + " && echo RC_OK", 120000);
+        if (r.stdout.contains("RC_OK")) return dest;
+        int slash = dest.lastIndexOf('/');
+        if (slash <= 0) return null;
+        String dir = dest.substring(0, slash);
+        Shell.Result r2 = Shell.exec("mkdir -p " + Shell.quote(dir) + " && cp " + Shell.quote(src)
+                + " " + Shell.quote(dest) + " && chmod 644 " + Shell.quote(dest) + " && echo RC_OK", 120000);
+        return r2.stdout.contains("RC_OK") ? dest : null;
+    }
+
+    private void pushFile(String name, String dest, String b64, String id) {
+        new Thread(() -> {
+            try {
+                String safe = name.replaceAll("[^A-Za-z0-9._-]", "_");
+                if (safe.isEmpty()) safe = "upload.bin";
+                byte[] bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
+                sendProgress(id, "收到 " + bytes.length + " 字节，写入下载目录");
+                Saved savedFile = saveToDownloads(safe, new java.io.ByteArrayInputStream(bytes));
+                if (savedFile == null) {
+                    sendResult(id, false, null, "push: 写下载目录失败");
+                    return;
+                }
+                String saved = savedFile.path;
+                String target = dest == null || dest.isEmpty() ? "/data/local/tmp/" + safe : dest;
+                boolean allowed = target.startsWith("/data/local/tmp/")
+                        || target.startsWith("/sdcard/") || target.startsWith("/storage/");
+                if (!allowed) {
+                    sendResult(id, false, saved, "push: 只允许写 /data/local/tmp 或 /sdcard");
+                    return;
+                }
+                if (!Shell.hasShell()) {
+                    sendResult(id, true, saved, "无 Shizuku，仅写入下载目录；目标=" + target);
+                    return;
+                }
+                sendProgress(id, "复制到 " + target);
+                String staged = stageToTmp(saved, target);
+                if (staged == null) {
+                    sendResult(id, false, saved, "push: 复制到 " + target + " 失败");
+                } else {
+                    sendResult(id, true, staged + " (" + bytes.length + " bytes)", "下载副本=" + saved);
+                }
+            } catch (Exception e) {
+                sendResult(id, false, null, "push failed: " + e.getMessage());
+            }
+        }, "cmd-push").start();
+    }
+
+    private String buildTime() {
+        try {
+            android.content.pm.PackageInfo pi = getPackageManager()
+                    .getPackageInfo(getPackageName(), 0);
+            return new java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US)
+                    .format(new java.util.Date(pi.lastUpdateTime));
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    private static String orDash(String s) {
+        return s == null || s.isEmpty() ? "-" : s;
+    }
+
+    private static boolean isAscii(String s) {
+        for (int i = 0; i < s.length(); i++) {
+            if (s.charAt(i) > 127) return false;
+        }
+        return true;
+    }
+
+    private static String joinTail(String[] args, int from) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = from; i < args.length; i++) {
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(args[i]);
+        }
+        return sb.toString();
+    }
+
+    private static boolean bool(JsonObject obj, String name, boolean def) {
+        return obj.has(name) && !obj.get(name).isJsonNull() ? obj.get(name).getAsBoolean() : def;
+    }
+
+    private static int intOf(JsonObject obj, String name, int def) {
+        return obj.has(name) && !obj.get(name).isJsonNull() ? obj.get(name).getAsInt() : def;
+    }
+
+    private static long timeoutOf(JsonObject obj, long def) {
+        return obj.has("timeoutMs") && !obj.get("timeoutMs").isJsonNull()
+                ? obj.get("timeoutMs").getAsLong() : def;
     }
 
     private void launchApp(String pkg, String id) {

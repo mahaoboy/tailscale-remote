@@ -81,7 +81,8 @@ public class RemoteAccessibilityService extends AccessibilityService {
         Path path = new Path();
         path.moveTo(x1, y1);
         path.lineTo(x2, y2);
-        long dur = Math.min(duration, 200);
+        // 过短的 duration 会被系统当成 fling，精细拖动（滚轮/滑块）必须保留调用方的时长
+        long dur = Math.max(50, Math.min(duration, 3000));
         GestureDescription.StrokeDescription stroke = new GestureDescription.StrokeDescription(path, 0, dur);
         GestureDescription gesture = new GestureDescription.Builder().addStroke(stroke).build();
         AccessibilityService.GestureResultCallback cb = new AccessibilityService.GestureResultCallback() {
@@ -141,39 +142,159 @@ public class RemoteAccessibilityService extends AccessibilityService {
 
     // ===== Screen Analysis =====
 
-    public static void findText(String text, String id) {
+    public static void findText(String text, boolean exact, int index, String id) {
         RemoteAccessibilityService svc = instance;
         if (svc == null) { fail(id, "a11y service not connected"); return; }
         AccessibilityNodeInfo root = svc.getRootInActiveWindow();
         if (root == null) { fail(id, "no active window"); return; }
-        AccessibilityNodeInfo found = findNodeByText(root, text);
-        if (found != null) {
-            Rect r = new Rect();
-            found.getBoundsInScreen(r);
-            int cx = (r.left + r.right) / 2;
-            int cy = (r.top + r.bottom) / 2;
-            okOut(id, cx + "," + cy + " [" + r.left + "," + r.top + "," + r.right + "," + r.bottom + "]");
-            found.recycle();
-        } else {
-            fail(id, "text not found: " + text);
+        java.util.List<AccessibilityNodeInfo> matches = new java.util.ArrayList<>();
+        collectMatches(root, text, matches, 0, 50, exact);
+        if (index < 0 || index >= matches.size()) {
+            String err = matches.isEmpty() ? "text not found: " + text
+                    : "index out of range: " + index + " (matches=" + matches.size() + ")";
+            for (AccessibilityNodeInfo n : matches) n.recycle();
+            root.recycle();
+            fail(id, err);
+            return;
         }
+        AccessibilityNodeInfo found = matches.get(index);
+        Rect r = new Rect();
+        found.getBoundsInScreen(r);
+        int cx = (r.left + r.right) / 2;
+        int cy = (r.top + r.bottom) / 2;
+        okOut(id, cx + "," + cy + " [" + r.left + "," + r.top + "," + r.right + "," + r.bottom + "]"
+                + " index=" + index + " of=" + matches.size());
+        for (AccessibilityNodeInfo n : matches) n.recycle();
         root.recycle();
     }
 
-    public static void tapText(String text, String id) {
+    public static void tapText(String text, boolean exact, int index, String id) {
         RemoteAccessibilityService svc = instance;
         if (svc == null) { fail(id, "a11y service not connected"); return; }
         AccessibilityNodeInfo root = svc.getRootInActiveWindow();
         if (root == null) { fail(id, "no active window"); return; }
-        AccessibilityNodeInfo found = findNodeByText(root, text);
-        if (found != null) {
-            boolean result = found.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-            if (result) ok(id); else fail(id, "click failed");
-            found.recycle();
-        } else {
-            fail(id, "text not found: " + text);
+        java.util.List<AccessibilityNodeInfo> matches = new java.util.ArrayList<>();
+        collectMatches(root, text, matches, 0, 50, exact);
+        if (index < 0 || index >= matches.size()) {
+            String err = matches.isEmpty() ? "text not found: " + text
+                    : "index out of range: " + index + " (matches=" + matches.size() + ")";
+            for (AccessibilityNodeInfo n : matches) n.recycle();
+            root.recycle();
+            fail(id, err);
+            return;
+        }
+        AccessibilityNodeInfo found = matches.get(index);
+        // 文字节点本身常不可点击（TextView 包在 LinearLayout 里），向上找可点击祖先
+        boolean result = clickSelfOrAncestor(found);
+        if (result) ok(id); else fail(id, "click failed");
+        for (AccessibilityNodeInfo n : matches) n.recycle();
+        root.recycle();
+    }
+
+    /** 紧凑列出可操作节点：#序号 类名 "文字" desc="..." [l,t,r,b] 标志。 */
+    public static void listUi(String filter, String id) {
+        RemoteAccessibilityService svc = instance;
+        if (svc == null) { fail(id, "a11y service not connected"); return; }
+        AccessibilityNodeInfo root = svc.getRootInActiveWindow();
+        if (root == null) { fail(id, "no active window"); return; }
+        java.util.List<AccessibilityNodeInfo> out = new java.util.ArrayList<>();
+        collectUiNodes(root, filter, out, 0, 300, true);
+        boolean filteredByVisible = true;
+        if (out.isEmpty() && (filter == null || filter.isEmpty())) {
+            collectUiNodes(root, filter, out, 0, 300, false);
+            filteredByVisible = false;
+        }
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        for (AccessibilityNodeInfo node : out) {
+            Rect r = new Rect();
+            node.getBoundsInScreen(r);
+            sb.append('#').append(i).append(' ').append(shortClass(node));
+            String t = node.getText() == null ? "" : node.getText().toString().trim();
+            String d = node.getContentDescription() == null ? "" : node.getContentDescription().toString().trim();
+            if (!t.isEmpty()) sb.append(" \"").append(escape(t)).append('"');
+            if (!d.isEmpty()) sb.append(" desc=\"").append(escape(d)).append('"');
+            sb.append(" [").append(r.left).append(',').append(r.top).append(',')
+              .append(r.right).append(',').append(r.bottom).append(']');
+            if (node.isClickable()) sb.append(" click");
+            if (node.isEditable()) sb.append(" edit");
+            if (node.isCheckable()) sb.append(node.isChecked() ? " checked" : " unchecked");
+            if (node.isScrollable()) sb.append(" scroll");
+            if (!node.isEnabled()) sb.append(" disabled");
+            sb.append('\n');
+            node.recycle();
+            i++;
         }
         root.recycle();
+        if (i == 0) {
+            okOut(id, "(no matching nodes, filter=" + (filter == null ? "" : filter) + ")");
+        } else {
+            okOut(id, sb.toString().trim() + "\n-- " + i + " nodes"
+                    + (filteredByVisible ? "" : " (含不可见节点)"));
+        }
+    }
+
+    /** 按 listUi 的序号点击（同一 filter 保证序号一致）。 */
+    public static void tapUiIndex(int index, String filter, String id) {
+        RemoteAccessibilityService svc = instance;
+        if (svc == null) { fail(id, "a11y service not connected"); return; }
+        AccessibilityNodeInfo root = svc.getRootInActiveWindow();
+        if (root == null) { fail(id, "no active window"); return; }
+        java.util.List<AccessibilityNodeInfo> out = new java.util.ArrayList<>();
+        collectUiNodes(root, filter, out, 0, 300, true);
+        if (out.isEmpty()) collectUiNodes(root, filter, out, 0, 300, false);
+        if (index < 0 || index >= out.size()) {
+            for (AccessibilityNodeInfo n : out) n.recycle();
+            root.recycle();
+            fail(id, "index out of range: " + index + " (nodes=" + out.size() + ")，先跑 uis 看序号");
+            return;
+        }
+        AccessibilityNodeInfo target = out.get(index);
+        boolean result = clickSelfOrAncestor(target);
+        if (result) ok(id); else fail(id, "click failed (node #" + index + " not clickable)");
+        for (AccessibilityNodeInfo n : out) n.recycle();
+        root.recycle();
+    }
+
+    private static void collectUiNodes(AccessibilityNodeInfo node, String filter,
+                                       java.util.List<AccessibilityNodeInfo> out,
+                                       int depth, int max, boolean requireVisible) {
+        if (node == null || depth > 30 || out.size() >= max) return;
+        if (requireVisible && !node.isVisibleToUser()) return;
+        String t = node.getText() == null ? "" : node.getText().toString();
+        String d = node.getContentDescription() == null ? "" : node.getContentDescription().toString();
+        boolean interesting = node.isClickable() || node.isEditable() || node.isCheckable()
+                || !t.trim().isEmpty() || !d.trim().isEmpty();
+        if (interesting && (filter == null || filter.isEmpty()
+                || t.contains(filter) || d.contains(filter))) {
+            out.add(node);
+        }
+        // 已收录的节点仍要下钻，子节点可能才是真正可点的
+        for (int i = 0; i < node.getChildCount(); i++) {
+            collectUiNodes(node.getChild(i), filter, out, depth + 1, max, requireVisible);
+        }
+    }
+
+    private static String shortClass(AccessibilityNodeInfo node) {
+        String cls = node.getClassName() == null ? "" : node.getClassName().toString();
+        int dot = cls.lastIndexOf('.');
+        return dot >= 0 ? cls.substring(dot + 1) : cls;
+    }
+
+    private static String escape(String s) {
+        return s.replace("\\", "\\\\").replace("\n", "\\n").replace("\"", "\\\"");
+    }
+
+    /** 当前前台窗口所属包名，用于判断用户是否切走了应用。 */
+    public static String foregroundPackage() {
+        RemoteAccessibilityService svc = instance;
+        if (svc == null) return "";
+        AccessibilityNodeInfo root = svc.getRootInActiveWindow();
+        if (root == null) return "";
+        CharSequence pkg = root.getPackageName();
+        String s = pkg == null ? "" : pkg.toString();
+        root.recycle();
+        return s;
     }
 
     public static void getText(String id) {
@@ -378,12 +499,20 @@ public class RemoteAccessibilityService extends AccessibilityService {
     private static void collectMatches(AccessibilityNodeInfo node, String text,
                                        java.util.List<AccessibilityNodeInfo> out,
                                        int depth, int max) {
+        collectMatches(node, text, out, depth, max, false);
+    }
+
+    private static void collectMatches(AccessibilityNodeInfo node, String text,
+                                       java.util.List<AccessibilityNodeInfo> out,
+                                       int depth, int max, boolean exact) {
         if (node == null || depth > 20 || out.size() >= max) return;
-        if (matches(node.getText(), text, false) || matches(node.getContentDescription(), text, false)) {
+        if (matches(node.getText(), text, exact) || matches(node.getContentDescription(), text, exact)) {
+            // 命中即收，不再下钻：否则父子节点会重复计数，index 选不准
             out.add(node);
-        }
-        for (int i = 0; i < node.getChildCount(); i++) {
-            collectMatches(node.getChild(i), text, out, depth + 1, max);
+        } else {
+            for (int i = 0; i < node.getChildCount() && out.size() < max; i++) {
+                collectMatches(node.getChild(i), text, out, depth + 1, max, exact);
+            }
         }
     }
 
@@ -413,17 +542,6 @@ public class RemoteAccessibilityService extends AccessibilityService {
     }
 
     // ===== Helpers =====
-
-    private static AccessibilityNodeInfo findNodeByText(AccessibilityNodeInfo root, String text) {
-        if (root == null) return null;
-        if (root.getText() != null && root.getText().toString().contains(text)) return root;
-        if (root.getContentDescription() != null && root.getContentDescription().toString().contains(text)) return root;
-        for (int i = 0; i < root.getChildCount(); i++) {
-            AccessibilityNodeInfo found = findNodeByText(root.getChild(i), text);
-            if (found != null) return found;
-        }
-        return null;
-    }
 
     private static void collectText(AccessibilityNodeInfo node, StringBuilder sb) {
         if (node == null) return;

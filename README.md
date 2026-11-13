@@ -39,16 +39,19 @@
 | 命令 | 功能 |
 |------|------|
 | `ping` | 检查连接 + 无障碍状态 + shell 后端 |
-| `check` | 完整状态检查（ws / a11y / shizuku / backend / 开机计数 / 自愈状态） |
+| `check` | 完整状态检查（ws / a11y / shizuku / backend / 开机计数 / 自愈状态 / 前台应用 / 构建时间） |
 | `recover` | Shizuku 自愈：开 Wi-Fi → 开无线调试 → 打开 Shizuku 点「启动」→ 等就绪 |
 | `screensize` | 获取屏幕分辨率 |
+| `uis [filter]` | 紧凑列出当前界面的可操作节点（序号 / 类名 / 文字 / 坐标 / 状态） |
+| `uitap <i> [filter]` | 按 `uis` 的序号点击，不用手算坐标 |
 | `tap x y` | 点击坐标 |
 | `longtap x y` | 长按 |
-| `swipe x1 y1 x2 y2 [dur]` | 滑动手势 |
-| `type text` | 输入文字 |
+| `swipe x1 y1 x2 y2 [dur]` | 滑动手势（dur 50–3000ms，短于 50ms 会退化成 fling） |
+| `type text` | 输入文字（支持中文，走 `ACTION_SET_TEXT`） |
 | `back` / `home` | 返回 / 主页 |
-| `findtext "text"` | 查找屏幕文字，返回坐标 |
-| `taptext "text"` | 点击包含文字的元素 |
+| `findtext "text" [i]` | 查找屏幕文字，返回坐标；`i` 指定第几个匹配 |
+| `taptext "text" [i]` | 点击包含文字的元素（自动上溯可点击父节点） |
+| `waittext "text" [sec]` | 轮询等待文字出现 |
 | `gettext` | 读取屏幕所有文字 |
 | `dump` | 获取完整 UI 节点树 |
 | `screenshot` | 截屏（有 Shizuku 时走 screencap，否则走无障碍截图） |
@@ -69,12 +72,13 @@ Shizuku 命令（需要 Shizuku 已启动并授权）：
 | `am <args...>` | `am start -n com.example/.MainActivity` 等 |
 | `dumpsys [args...]` | `dumpsys battery` / `dumpsys window` 等 |
 | `props [key]` | `getprop`，如 `props ro.product.model` |
-| `install <path>` | `pm install -r <手机上的路径>` |
+| `put <local> [dest]` | 把电脑上的文件推到手机（默认 `/data/local/tmp/<name>`，仅允许 tmp/sdcard） |
+| `install <path>` | `pm install -r`；`/sdcard` 路径会自动复制到 `/data/local/tmp` 再装 |
 | `uninstall <pkg> [--keep]` | `pm uninstall [-k]` |
 | `shizuku [request]` | 查看 Shizuku 状态 / 弹出授权框 |
-| `update [url]` | 下载并安装 APK 更新（有 Shizuku 时静默安装） |
+| `update [url]` | 下载并安装 APK 更新（下载走长超时客户端，安装前自动落到 `/data/local/tmp`） |
 
-除 `shell` 外，所有参数都会被 shell 转义后再拼接，避免命令注入。
+除 `shell` 外，所有参数都会被 shell 转义后再拼接，避免命令注入。`am/settings/appops/dumpsys/input` 也支持把整条命令加引号传入（CLI 会自动拆分 token）。
 
 ## 使用
 
